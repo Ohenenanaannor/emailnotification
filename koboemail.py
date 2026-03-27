@@ -2,12 +2,15 @@ import requests
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 import time
 from dotenv import load_dotenv
+import psycopg2
+from flask import Flask
+import threading
 
-# Load local environment variables if needed (optional on Render)
+# Load environment variables
 load_dotenv()
 
 # ------------------------
@@ -23,18 +26,15 @@ EMAIL_USER = "ohenenana.annor@raincoatroofingsystems.com"
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 SUPERVISOR_EMAIL = "ohenenanaannor2000@gmail.com"
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 # ------------------------
 # DATABASE
 # ------------------------
-import psycopg2
-
-DATABASE_URL = os.getenv("DATABASE_URL")  # set on Render
-
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
 def create_table():
-    """Create table to store processed submission IDs"""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -58,13 +58,16 @@ def is_processed(sub_id):
 def mark_processed(sub_id):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("INSERT INTO processed_submissions(submission_id) VALUES (%s) ON CONFLICT DO NOTHING", (sub_id,))
+    cur.execute(
+        "INSERT INTO processed_submissions(submission_id) VALUES (%s) ON CONFLICT DO NOTHING",
+        (sub_id,)
+    )
     conn.commit()
     cur.close()
     conn.close()
 
 # ------------------------
-# FIELD FINDER
+# HELPERS
 # ------------------------
 def find_value(submission, keyword):
     for key, value in submission.items():
@@ -72,9 +75,6 @@ def find_value(submission, keyword):
             return value
     return None
 
-# ------------------------
-# VALUE NORMALIZER
-# ------------------------
 def is_not_ok(value):
     if value is None:
         return False
@@ -93,7 +93,6 @@ def is_yes(value):
 def categorize_issues(sub):
     serious, moderate, info = [], [], []
 
-    # 🔴 SERIOUS
     if is_not_ok(find_value(sub, "engine_oil")):
         serious.append("Engine oil level")
     if is_not_ok(find_value(sub, "coolant_level")):
@@ -110,103 +109,44 @@ def categorize_issues(sub):
         serious.append("DVLA expired")
     if is_yes(find_value(sub, "road_worthy")):
         serious.append("Road worthy expired")
-    if is_not_ok(find_value(sub, "fan_belts")):
-        serious.append("Fan belts condition")
-    if is_not_ok(find_value(sub, "coolant_leaks")):
-        serious.append("Coolant leakage")
-    if is_not_ok(find_value(sub, "sound_of_engine")):
-        serious.append("Abnormal engine sound")
-    if is_not_ok(find_value(sub, "smoking")):
-        serious.append("Engine smoking")
 
-    # 🟠 MODERATE
     if is_not_ok(find_value(sub, "horn_function")):
         moderate.append("Horn not working")
-    if is_not_ok(find_value(sub, "indicator")):
-        moderate.append("Indicator issue")
-    if is_not_ok(find_value(sub, "fan_operation")):
-        moderate.append("Fan issue")
-    if is_not_ok(find_value(sub, "panel_dashboard")):
-        moderate.append("Dashboard light issue")
-    if is_not_ok(find_value(sub, "warning_reflective_triangle")):
-        moderate.append("Warning triangle missing")
-    if is_not_ok(find_value(sub, "brake_hand_brake_function")):
-        moderate.append("Hand brake issue")
-    if is_not_ok(find_value(sub, "brake_light_function")):
-        moderate.append("Brake light issue")
-    if is_not_ok(find_value(sub, "headlamp_function")):
-        moderate.append("Headlamp issue")
-    if is_not_ok(find_value(sub, "tail_light_function")):
-        moderate.append("Tail light issue")
 
-    # 🟢 INFO
     if is_not_ok(find_value(sub, "cleanliness")):
         info.append("Cleanliness issue")
-    if is_not_ok(find_value(sub, "seat")):
-        info.append("Seat issue")
-    if is_not_ok(find_value(sub, "windscreen")):
-        info.append("Windscreen issue")
-    if is_not_ok(find_value(sub, "side_mirror")):
-        info.append("Side mirror issue")
-    if is_not_ok(find_value(sub, "reflective_sticker")):
-        info.append("Reflective sticker issue")
-    if is_not_ok(find_value(sub, "jack_wheel_spanner")):
-        info.append("Jack & wheel spanner missing")
-    if is_not_ok(find_value(sub, "fire_extinguisher")):
-        info.append("Fire extinguisher issue")
-    if is_not_ok(find_value(sub, "chucks")):
-        info.append("Wheel chucks missing")
-    if is_not_ok(find_value(sub, "container_belts_and_ropes")):
-        info.append("Container belts/ropes issue")
 
     return serious, moderate, info
 
 # ------------------------
-# FORMAT EMAIL
+# EMAIL
 # ------------------------
 def format_email(sub, serious, moderate, info):
     vehicle = sub.get("Please_select_Vehicle_Number", "Unknown")
     driver = sub.get("Please_select_you_name", "Unknown")
-    vehicle_type = sub.get("Select_Vehicle_type", "Unknown")
-    location = sub.get("Select_your_specific_location", "Unknown")
-    date_time = sub.get("Enter_date_and_time", str(datetime.now()))
 
-    def make_list(items, color):
-        if not items:
-            return "<li>None</li>"
-        return "".join([f"<li style='color:{color}'>{i}</li>" for i in items])
+    def make_list(items):
+        return "".join([f"<li>{i}</li>" for i in items]) or "<li>None</li>"
 
     return f"""
     <html>
     <body>
-        <p>Hello Supervisor,</p>
+        <h3>Vehicle Report</h3>
+        <p><b>Vehicle:</b> {vehicle}</p>
+        <p><b>Driver:</b> {driver}</p>
 
-        <h3>Vehicle Info</h3>
-        <ul>
-            <li><b>Vehicle:</b> {vehicle}</li>
-            <li><b>Driver:</b> {driver}</li>
-            <li><b>Type:</b> {vehicle_type}</li>
-            <li><b>Location:</b> {location}</li>
-            <li><b>Date:</b> {date_time}</li>
-        </ul>
+        <h4 style="color:red;">Serious</h4>
+        <ul>{make_list(serious)}</ul>
 
-        <h3 style="color:red;">Serious Issues</h3>
-        <ul>{make_list(serious, "red")}</ul>
+        <h4 style="color:orange;">Moderate</h4>
+        <ul>{make_list(moderate)}</ul>
 
-        <h3 style="color:orange;">Moderate Issues</h3>
-        <ul>{make_list(moderate, "orange")}</ul>
-
-        <h3 style="color:green;">Minor Issues</h3>
-        <ul>{make_list(info, "green")}</ul>
-
-        <p>Regards,<br>Fleet System</p>
+        <h4 style="color:green;">Info</h4>
+        <ul>{make_list(info)}</ul>
     </body>
     </html>
     """
 
-# ------------------------
-# SEND EMAIL
-# ------------------------
 def send_email(subject, body):
     msg = MIMEMultipart()
     msg["Subject"] = subject
@@ -219,59 +159,57 @@ def send_email(subject, body):
         server.send_message(msg)
 
 # ------------------------
-# FETCH DATA
+# FETCH
 # ------------------------
 def fetch():
     r = requests.get(KOBOTOOLBOX_API_URL, auth=(KOBOTOOLBOX_USERNAME, KOBOTOOLBOX_PASSWORD))
     return r.json().get("results", [])
 
 # ------------------------
-# CHECK RECENT (OPTIONAL)
-# ------------------------
-def is_recent(sub):
-    submission_time = sub.get("_submission_time")
-    if not submission_time:
-        return False
-    sub_time = datetime.fromisoformat(submission_time.replace("Z", ""))
-    return sub_time > datetime.now() - timedelta(minutes=10)
-
-# ------------------------
-# MAIN
+# MAIN LOGIC
 # ------------------------
 def main():
-    create_table()  # ensure DB table exists
+    create_table()
     subs = sorted(fetch(), key=lambda x: x.get("_id", 0))
 
     for sub in subs:
         sub_id = sub.get("_id", 0)
 
-        # ✅ Only process new submissions
         if not is_processed(sub_id):
             serious, moderate, info = categorize_issues(sub)
+
             subject = f"Vehicle Report - {sub.get('Please_select_Vehicle_Number')}"
             body = format_email(sub, serious, moderate, info)
 
             send_email(subject, body)
-            print(f"✅ Email sent for submission {sub_id}")
+            print(f"✅ Sent {sub_id}")
 
-            mark_processed(sub_id)  # save in DB
+            mark_processed(sub_id)
 
 # ------------------------
-from flask import Flask
-import threading
-
-app = Flask(__name__)
-
-# Run your loop in background
+# BACKGROUND LOOP
+# ------------------------
 def run_worker():
     while True:
-        main()
-        time.sleep(300)
+        try:
+            main()
+        except Exception as e:
+            print("❌ Error:", e)
+
+        time.sleep(300)  # 5 minutes
+
+# ------------------------
+# FLASK APP
+# ------------------------
+app = Flask(__name__)
 
 @app.route("/")
 def home():
     return "Kobo Email Service Running ✅"
 
+# ------------------------
+# START
+# ------------------------
 if __name__ == "__main__":
     threading.Thread(target=run_worker).start()
     app.run(host="0.0.0.0", port=10000)
