@@ -32,7 +32,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # DATABASE
 # ------------------------
 def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg2.connect(DATABASE_URL, sslmode='require')  # ✅ FIXED
 
 def create_table():
     conn = get_conn()
@@ -178,11 +178,13 @@ def main():
         if not is_processed(sub_id):
             serious, moderate, info = categorize_issues(sub)
 
-            subject = f"Vehicle Report - {sub.get('Please_select_Vehicle_Number')}"
-            body = format_email(sub, serious, moderate, info)
+            # ✅ OPTIONAL: only send if issues exist
+            if serious or moderate or info:
+                subject = f"Vehicle Report - {sub.get('Please_select_Vehicle_Number')}"
+                body = format_email(sub, serious, moderate, info)
 
-            send_email(subject, body)
-            print(f"✅ Sent {sub_id}")
+                send_email(subject, body)
+                print(f"✅ Sent {sub_id}")
 
             mark_processed(sub_id)
 
@@ -199,7 +201,7 @@ def run_worker():
         time.sleep(300)  # 5 minutes
 
 # ------------------------
-# FLASK APP
+# FLASK APP (for Render)
 # ------------------------
 app = Flask(__name__)
 
@@ -211,5 +213,5 @@ def home():
 # START
 # ------------------------
 if __name__ == "__main__":
-    threading.Thread(target=run_worker).start()
+    threading.Thread(target=run_worker, daemon=True).start()  # ✅ FIXED
     app.run(host="0.0.0.0", port=10000)
