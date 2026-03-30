@@ -161,6 +161,20 @@ def format_email(sub, serious, moderate, info):
     """
 
 # ------------------------
+# PROCESS SUBMISSION
+# ------------------------
+def process_submission(sub):
+    sub_id = sub.get("_id")
+    if not sub_id or is_processed(sub_id):
+        return
+    serious, moderate, info = categorize_issues(sub)
+    if serious or moderate or info:
+        subject = f"Vehicle Report - {find_value(sub, 'vehicle')}"
+        body = format_email(sub, serious, moderate, info)
+        send_email(subject, body)
+    mark_processed(sub_id)
+
+# ------------------------
 # FETCH KOBO (Backup Fetch)
 # ------------------------
 def fetch():
@@ -178,20 +192,6 @@ def fetch():
         print("❌ FETCH ERROR:", e)
         return []
 
-def process_submission(sub):
-    sub_id = sub.get("_id")
-    if not sub_id or is_processed(sub_id):
-        return
-    serious, moderate, info = categorize_issues(sub)
-    if serious or moderate or info:
-        subject = f"Vehicle Report - {find_value(sub, 'vehicle')}"
-        body = format_email(sub, serious, moderate, info)
-        send_email(subject, body)
-    mark_processed(sub_id)
-
-# ------------------------
-# BACKUP WORKER LOOP
-# ------------------------
 def run_backup_worker():
     while True:
         print("🔁 Running backup fetch...")
@@ -212,8 +212,11 @@ def home():
 @app.route("/kobo-webhook", methods=["POST"])
 def kobo_webhook():
     data = request.json
-    print("🔔 Webhook received:", data.get("_id"))
-    process_submission(data)
+    if data:
+        print("🔔 Webhook received:", data.get("_id"))
+        process_submission(data)
+    else:
+        print("❌ Webhook received empty payload")
     return {"status": "success"}, 200
 
 # ------------------------
@@ -222,4 +225,7 @@ def kobo_webhook():
 if __name__ == "__main__":
     create_table()
     threading.Thread(target=run_backup_worker, daemon=True).start()
-    app.run(host="0.0.0.0", port=10000)
+
+    # Use Render's port
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
