@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import psycopg2
 from flask import Flask
 import threading
+import traceback
 
 # ------------------------
 # LOAD ENV
@@ -132,20 +133,32 @@ def categorize_issues(sub):
 # ------------------------
 def send_email(subject, body):
     try:
+        print(f"📧 Preparing to send email: {subject}")
+
         msg = MIMEMultipart()
         msg["Subject"] = subject
         msg["From"] = EMAIL_USER
         msg["To"] = SUPERVISOR_EMAIL
         msg.attach(MIMEText(body, "html"))
 
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+        print(f"📧 Connecting to SMTP server {SMTP_SERVER}:{SMTP_PORT}...")
+
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=20) as server:
+            server.set_debuglevel(1)  # Show SMTP protocol in logs
             server.login(EMAIL_USER, EMAIL_PASSWORD)
+            print("📧 Logged in successfully")
             server.send_message(msg)
+            print(f"📧 Email sent to {SUPERVISOR_EMAIL} ✅")
 
-        print("📧 EMAIL SENT ✅")
-
+    except smtplib.SMTPAuthenticationError:
+        print("❌ SMTP AUTHENTICATION FAILED. Check EMAIL_USER and EMAIL_PASSWORD")
+        traceback.print_exc()
+    except smtplib.SMTPConnectError:
+        print("❌ SMTP CONNECTION FAILED. Could be blocked by Render or wrong server/port")
+        traceback.print_exc()
     except Exception as e:
         print("❌ EMAIL ERROR:", e)
+        traceback.print_exc()
 
 # ------------------------
 # FORMAT EMAIL
@@ -203,7 +216,9 @@ def fetch():
 
     except Exception as e:
         print("❌ FETCH ERROR:", e)
+        traceback.print_exc()
         return []
+
 # ------------------------
 # MAIN
 # ------------------------
@@ -248,6 +263,7 @@ def run_worker():
             main()
         except Exception as e:
             print("❌ LOOP ERROR:", e)
+            traceback.print_exc()
 
         time.sleep(300)
 
