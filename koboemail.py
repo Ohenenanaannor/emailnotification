@@ -11,7 +11,7 @@ from flask import Flask
 import threading
 
 # ------------------------
-# LOAD ENV
+# LOAD ENV (optional local fallback)
 # ------------------------
 load_dotenv()
 
@@ -20,7 +20,7 @@ KOBOTOOLBOX_USERNAME = "annorpoku"
 KOBOTOOLBOX_PASSWORD = os.getenv("KOBOTOOLBOX_PASSWORD")
 
 SMTP_SERVER = "smtp.infomaniak.com"
-SMTP_PORT = 465
+SMTP_PORT = 587  # STARTTLS port
 EMAIL_USER = "ohenenana.annor@raincoatroofingsystems.com"
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 SUPERVISOR_EMAIL = "ohenenanaannor2000@gmail.com"
@@ -92,32 +92,24 @@ def is_yes(value):
 def categorize_issues(sub):
     serious, moderate, info = [], [], []
 
-    print("🔍 FULL SUBMISSION:", sub)  # DEBUG
+    print("🔍 FULL SUBMISSION:", sub)
 
     if is_not_ok(find_value(sub, "engine_oil")):
         serious.append("Engine oil level")
-
     if is_not_ok(find_value(sub, "coolant")):
         serious.append("Coolant level")
-
     if is_not_ok(find_value(sub, "brake")):
         serious.append("Brake fluid")
-
     if is_not_ok(find_value(sub, "steering")):
         serious.append("Power steering")
-
     if is_not_ok(find_value(sub, "tyre")):
         serious.append("Tyre condition")
-
     if is_yes(find_value(sub, "dvla")):
         serious.append("DVLA expired")
-
     if is_yes(find_value(sub, "road")):
         serious.append("Road worthy expired")
-
     if is_not_ok(find_value(sub, "horn")):
         moderate.append("Horn not working")
-
     if is_not_ok(find_value(sub, "clean")):
         info.append("Cleanliness issue")
 
@@ -138,11 +130,22 @@ def send_email(subject, body):
         msg["To"] = SUPERVISOR_EMAIL
         msg.attach(MIMEText(body, "html"))
 
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.send_message(msg)
-
-        print("📧 EMAIL SENT ✅")
+        # Try SSL first
+        try:
+            with smtplib.SMTP_SSL(SMTP_SERVER, 465) as server:
+                server.set_debuglevel(1)
+                server.login(EMAIL_USER, EMAIL_PASSWORD)
+                server.send_message(msg)
+            print("📧 EMAIL SENT via SSL ✅")
+        except Exception as e_ssl:
+            print("⚠️ SSL failed, trying STARTTLS on port 587:", e_ssl)
+            # Fallback to STARTTLS
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.set_debuglevel(1)
+                server.starttls()
+                server.login(EMAIL_USER, EMAIL_PASSWORD)
+                server.send_message(msg)
+            print("📧 EMAIL SENT via STARTTLS ✅")
 
     except Exception as e:
         print("❌ EMAIL ERROR:", e)
@@ -182,45 +185,35 @@ def format_email(sub, serious, moderate, info):
 def fetch():
     try:
         print("🌐 Calling Kobo API...")
-
         r = requests.get(
             KOBOTOOLBOX_API_URL,
             auth=(KOBOTOOLBOX_USERNAME, KOBOTOOLBOX_PASSWORD)
         )
-
         print("🌐 STATUS:", r.status_code)
         print("🌐 RAW RESPONSE:", r.text[:300])
-
         if r.status_code != 200:
             return []
-
         data = r.json()
         results = data.get("results", [])
-
         print(f"📦 FETCHED {len(results)} submissions")
-
         return results
-
     except Exception as e:
         print("❌ FETCH ERROR:", e)
         return []
+
 # ------------------------
 # MAIN
 # ------------------------
 def main():
     print("🔁 RUNNING MAIN")
-
     create_table()
     subs = sorted(fetch(), key=lambda x: x.get("_id", 0))
 
     for sub in subs:
         sub_id = sub.get("_id")
-
         print(f"➡️ Processing {sub_id}")
-
         if not sub_id:
             continue
-
         if is_processed(sub_id):
             print("⏭️ Already processed")
             continue
@@ -230,7 +223,6 @@ def main():
         if serious or moderate or info:
             subject = f"Vehicle Report - {find_value(sub, 'vehicle')}"
             body = format_email(sub, serious, moderate, info)
-
             send_email(subject, body)
         else:
             print("ℹ️ No issues found")
@@ -242,14 +234,12 @@ def main():
 # ------------------------
 def run_worker():
     print("🚀 WORKER STARTED")
-
     while True:
         try:
             main()
         except Exception as e:
             print("❌ LOOP ERROR:", e)
-
-        time.sleep(300)
+        time.sleep(300)  # 5 minutes
 
 # ------------------------
 # FLASK
