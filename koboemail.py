@@ -10,12 +10,11 @@ import psycopg2
 from flask import Flask
 import threading
 
-# Load environment variables
+# ------------------------
+# LOAD ENV
+# ------------------------
 load_dotenv()
 
-# ------------------------
-# CONFIG
-# ------------------------
 KOBOTOOLBOX_API_URL = "https://kf.kobotoolbox.org/api/v2/assets/ahCr8ALo67qrBdaRjQkm8K/data/"
 KOBOTOOLBOX_USERNAME = "annorpoku"
 KOBOTOOLBOX_PASSWORD = os.getenv("KOBOTOOLBOX_PASSWORD")
@@ -32,7 +31,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # DATABASE
 # ------------------------
 def get_conn():
-    return psycopg2.connect(DATABASE_URL, sslmode='require')  # ✅ FIXED
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 def create_table():
     conn = get_conn()
@@ -79,13 +78,13 @@ def is_not_ok(value):
     if value is None:
         return False
     value = str(value).lower().strip()
-    return value in ["not_okay", "no", "1", "false", "bad"]
+    return value in ["not_okay", "no", "false", "bad", "0"]
 
 def is_yes(value):
     if value is None:
         return False
     value = str(value).lower().strip()
-    return value in ["yes", "0", "true"]
+    return value in ["yes", "true", "1"]
 
 # ------------------------
 # ISSUE CATEGORIZATION
@@ -93,37 +92,67 @@ def is_yes(value):
 def categorize_issues(sub):
     serious, moderate, info = [], [], []
 
+    print("🔍 FULL SUBMISSION:", sub)  # DEBUG
+
     if is_not_ok(find_value(sub, "engine_oil")):
         serious.append("Engine oil level")
-    if is_not_ok(find_value(sub, "coolant_level")):
+
+    if is_not_ok(find_value(sub, "coolant")):
         serious.append("Coolant level")
-    if is_not_ok(find_value(sub, "brake_fluid")):
+
+    if is_not_ok(find_value(sub, "brake")):
         serious.append("Brake fluid")
-    if is_not_ok(find_value(sub, "power_steering")):
-        serious.append("Power steering oil")
-    if is_not_ok(find_value(sub, "exhaust")):
-        serious.append("Exhaust leakage")
+
+    if is_not_ok(find_value(sub, "steering")):
+        serious.append("Power steering")
+
     if is_not_ok(find_value(sub, "tyre")):
         serious.append("Tyre condition")
+
     if is_yes(find_value(sub, "dvla")):
         serious.append("DVLA expired")
-    if is_yes(find_value(sub, "road_worthy")):
+
+    if is_yes(find_value(sub, "road")):
         serious.append("Road worthy expired")
 
-    if is_not_ok(find_value(sub, "horn_function")):
+    if is_not_ok(find_value(sub, "horn")):
         moderate.append("Horn not working")
 
-    if is_not_ok(find_value(sub, "cleanliness")):
+    if is_not_ok(find_value(sub, "clean")):
         info.append("Cleanliness issue")
+
+    print("🚨 Serious:", serious)
+    print("⚠️ Moderate:", moderate)
+    print("ℹ️ Info:", info)
 
     return serious, moderate, info
 
 # ------------------------
 # EMAIL
 # ------------------------
+def send_email(subject, body):
+    try:
+        msg = MIMEMultipart()
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_USER
+        msg["To"] = SUPERVISOR_EMAIL
+        msg.attach(MIMEText(body, "html"))
+
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        print("📧 EMAIL SENT ✅")
+
+    except Exception as e:
+        print("❌ EMAIL ERROR:", e)
+
+# ------------------------
+# FORMAT EMAIL
+# ------------------------
 def format_email(sub, serious, moderate, info):
-    vehicle = sub.get("Please_select_Vehicle_Number", "Unknown")
-    driver = sub.get("Please_select_you_name", "Unknown")
+    vehicle = find_value(sub, "vehicle") or "Unknown"
+    driver = find_value(sub, "name") or "Unknown"
 
     def make_list(items):
         return "".join([f"<li>{i}</li>" for i in items]) or "<li>None</li>"
@@ -147,61 +176,82 @@ def format_email(sub, serious, moderate, info):
     </html>
     """
 
-def send_email(subject, body):
-    msg = MIMEMultipart()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
-    msg["To"] = SUPERVISOR_EMAIL
-    msg.attach(MIMEText(body, "html"))
-
-    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
-        server.login(EMAIL_USER, EMAIL_PASSWORD)
-        server.send_message(msg)
-
 # ------------------------
-# FETCH
+# FETCH KOBO
 # ------------------------
 def fetch():
-    r = requests.get(KOBOTOOLBOX_API_URL, auth=(KOBOTOOLBOX_USERNAME, KOBOTOOLBOX_PASSWORD))
-    return r.json().get("results", [])
+    try:
+        r = requests.get(
+            KOBOTOOLBOX_API_URL,
+            auth=(KOBOTOOLBOX_USERNAME, KOBOTOOLBOX_PASSWORD)
+        )
+
+        print("🌐 STATUS:", r.status_code)
+
+        if r.status_code != 200:
+            print("❌ BAD RESPONSE:", r.text)
+            return []
+
+        data = r.json()
+        results = data.get("results", [])
+
+        print(f"📦 FETCHED {len(results)} submissions")
+
+        return results
+
+    except Exception as e:
+        print("❌ FETCH ERROR:", e)
+        return []
 
 # ------------------------
-# MAIN LOGIC
+# MAIN
 # ------------------------
 def main():
+    print("🔁 RUNNING MAIN")
+
     create_table()
     subs = sorted(fetch(), key=lambda x: x.get("_id", 0))
 
     for sub in subs:
-        sub_id = sub.get("_id", 0)
+        sub_id = sub.get("_id")
 
-        if not is_processed(sub_id):
-            serious, moderate, info = categorize_issues(sub)
+        print(f"➡️ Processing {sub_id}")
 
-            # ✅ OPTIONAL: only send if issues exist
-            if serious or moderate or info:
-                subject = f"Vehicle Report - {sub.get('Please_select_Vehicle_Number')}"
-                body = format_email(sub, serious, moderate, info)
+        if not sub_id:
+            continue
 
-                send_email(subject, body)
-                print(f"✅ Sent {sub_id}")
+        if is_processed(sub_id):
+            print("⏭️ Already processed")
+            continue
 
-            mark_processed(sub_id)
+        serious, moderate, info = categorize_issues(sub)
+
+        if serious or moderate or info:
+            subject = f"Vehicle Report - {find_value(sub, 'vehicle')}"
+            body = format_email(sub, serious, moderate, info)
+
+            send_email(subject, body)
+        else:
+            print("ℹ️ No issues found")
+
+        mark_processed(sub_id)
 
 # ------------------------
-# BACKGROUND LOOP
+# WORKER LOOP
 # ------------------------
 def run_worker():
+    print("🚀 WORKER STARTED")
+
     while True:
         try:
             main()
         except Exception as e:
-            print("❌ Error:", e)
+            print("❌ LOOP ERROR:", e)
 
-        time.sleep(300)  # 5 minutes
+        time.sleep(300)
 
 # ------------------------
-# FLASK APP (for Render)
+# FLASK
 # ------------------------
 app = Flask(__name__)
 
@@ -213,5 +263,5 @@ def home():
 # START
 # ------------------------
 if __name__ == "__main__":
-    threading.Thread(target=run_worker, daemon=True).start()  # ✅ FIXED
+    threading.Thread(target=run_worker, daemon=True).start()
     app.run(host="0.0.0.0", port=10000)
