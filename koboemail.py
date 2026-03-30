@@ -181,15 +181,17 @@ def format_email(sub, serious, moderate, info):
 # ------------------------
 def fetch():
     try:
+        print("🌐 Calling Kobo API...")
+
         r = requests.get(
             KOBOTOOLBOX_API_URL,
             auth=(KOBOTOOLBOX_USERNAME, KOBOTOOLBOX_PASSWORD)
         )
 
         print("🌐 STATUS:", r.status_code)
+        print("🌐 RAW RESPONSE:", r.text[:300])
 
         if r.status_code != 200:
-            print("❌ BAD RESPONSE:", r.text)
             return []
 
         data = r.json()
@@ -202,7 +204,6 @@ def fetch():
     except Exception as e:
         print("❌ FETCH ERROR:", e)
         return []
-
 # ------------------------
 # MAIN
 # ------------------------
