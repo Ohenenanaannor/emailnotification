@@ -281,4 +281,6 @@ def home():
 # ------------------------
 if __name__ == "__main__":
     threading.Thread(target=run_worker, daemon=True).start()
-    app.run(host="0.0.0.0", port=10000)
+    
+    port = int(os.environ.get("PORT", 10000))  # Use Render’s port or default 10000 locally
+    app.run(host="0.0.0.0", port=port)
