@@ -19,7 +19,7 @@ KOBOTOOLBOX_USERNAME = "annorpoku"
 KOBOTOOLBOX_PASSWORD = os.getenv("KOBOTOOLBOX_PASSWORD")
 
 EMAIL_USER = "ohenenana.annor@raincoatroofingsystems.com"
-SUPERVISOR_EMAIL = "ohenenanaannor2000@gmail.com"
+SUPERVISOR_EMAIL = "carlos.owusu@raincoatroofingsystems.com"
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
