@@ -1,7 +1,4 @@
 import requests
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import os
 import time
@@ -9,9 +6,11 @@ from dotenv import load_dotenv
 import psycopg2
 from flask import Flask
 import threading
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 # ------------------------
-# LOAD ENV (optional local fallback)
+# LOAD ENV
 # ------------------------
 load_dotenv()
 
@@ -19,10 +18,7 @@ KOBOTOOLBOX_API_URL = "https://kf.kobotoolbox.org/api/v2/assets/ahCr8ALo67qrBdaR
 KOBOTOOLBOX_USERNAME = "annorpoku"
 KOBOTOOLBOX_PASSWORD = os.getenv("KOBOTOOLBOX_PASSWORD")
 
-SMTP_SERVER = "smtp.infomaniak.com"
-SMTP_PORT = 587  # STARTTLS port
 EMAIL_USER = "ohenenana.annor@raincoatroofingsystems.com"
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 SUPERVISOR_EMAIL = "ohenenanaannor2000@gmail.com"
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -120,32 +116,21 @@ def categorize_issues(sub):
     return serious, moderate, info
 
 # ------------------------
-# EMAIL
+# EMAIL (SENDGRID)
 # ------------------------
 def send_email(subject, body):
     try:
-        msg = MIMEMultipart()
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_USER
-        msg["To"] = SUPERVISOR_EMAIL
-        msg.attach(MIMEText(body, "html"))
+        message = Mail(
+            from_email=EMAIL_USER,
+            to_emails=SUPERVISOR_EMAIL,
+            subject=subject,
+            html_content=body
+        )
 
-        # Try SSL first
-        try:
-            with smtplib.SMTP_SSL(SMTP_SERVER, 465) as server:
-                server.set_debuglevel(1)
-                server.login(EMAIL_USER, EMAIL_PASSWORD)
-                server.send_message(msg)
-            print("📧 EMAIL SENT via SSL ✅")
-        except Exception as e_ssl:
-            print("⚠️ SSL failed, trying STARTTLS on port 587:", e_ssl)
-            # Fallback to STARTTLS
-            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-                server.set_debuglevel(1)
-                server.starttls()
-                server.login(EMAIL_USER, EMAIL_PASSWORD)
-                server.send_message(msg)
-            print("📧 EMAIL SENT via STARTTLS ✅")
+        sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
+        response = sg.send(message)
+
+        print(f"📧 Email sent! Status: {response.status_code}")
 
     except Exception as e:
         print("❌ EMAIL ERROR:", e)
@@ -191,12 +176,16 @@ def fetch():
         )
         print("🌐 STATUS:", r.status_code)
         print("🌐 RAW RESPONSE:", r.text[:300])
+
         if r.status_code != 200:
             return []
+
         data = r.json()
         results = data.get("results", [])
+
         print(f"📦 FETCHED {len(results)} submissions")
         return results
+
     except Exception as e:
         print("❌ FETCH ERROR:", e)
         return []
@@ -206,14 +195,18 @@ def fetch():
 # ------------------------
 def main():
     print("🔁 RUNNING MAIN")
+
     create_table()
     subs = sorted(fetch(), key=lambda x: x.get("_id", 0))
 
     for sub in subs:
         sub_id = sub.get("_id")
+
         print(f"➡️ Processing {sub_id}")
+
         if not sub_id:
             continue
+
         if is_processed(sub_id):
             print("⏭️ Already processed")
             continue
@@ -223,6 +216,7 @@ def main():
         if serious or moderate or info:
             subject = f"Vehicle Report - {find_value(sub, 'vehicle')}"
             body = format_email(sub, serious, moderate, info)
+
             send_email(subject, body)
         else:
             print("ℹ️ No issues found")
@@ -234,12 +228,14 @@ def main():
 # ------------------------
 def run_worker():
     print("🚀 WORKER STARTED")
+
     while True:
         try:
             main()
         except Exception as e:
             print("❌ LOOP ERROR:", e)
-        time.sleep(300)  # 5 minutes
+
+        time.sleep(300)
 
 # ------------------------
 # FLASK
