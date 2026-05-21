@@ -301,14 +301,24 @@ def home():
     return "Kobo Email Service Running ✅"
 
 
-@app.route("/webhook", methods=["GET", "POST"])  # GET handles Kobo's endpoint verification
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
-
-    # Kobo sends a GET request first to verify the endpoint is alive
     if request.method == "GET":
-        print("✅ Webhook GET verification received")
         return jsonify({"status": "ok"}), 200
 
+    data = request.get_json(silent=True)
+
+    if not data:
+        return jsonify({"error": "Invalid payload"}), 400
+
+    # DEBUG - print all field names and values
+    print("📋 RAW SUBMISSION FIELDS:")
+    for key, value in data.items():
+        print(f"   {key}: {value}")
+
+    threading.Thread(target=process_submission, args=(data,), daemon=True).start()
+
+    return jsonify({"status": "received"}), 200
     # --- Optional secret token verification ---
     if WEBHOOK_SECRET:
         token = request.headers.get("Authorization", "")
