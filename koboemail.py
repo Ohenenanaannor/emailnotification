@@ -26,7 +26,6 @@ SUPERVISOR_EMAIL = "ohenenanaannor2000@gmail.com"
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Optional: set a secret token to verify Kobo webhook requests
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # leave blank in .env to skip verification
 
 # ------------------------
@@ -156,17 +155,17 @@ def format_email(sub, serious, moderate, info):
     return f"""
     <html>
     <body>
-        <h3>Vehicle Report</h3>
+        <h3>Vehicle Inspection Report</h3>
         <p><b>Vehicle:</b> {vehicle}</p>
         <p><b>Driver:</b> {driver}</p>
 
-        <h4 style="color:red;">Serious</h4>
+        <h4 style="color:red;">🔴 Serious Issues</h4>
         <ul>{make_list(serious)}</ul>
 
-        <h4 style="color:orange;">Moderate</h4>
+        <h4 style="color:orange;">🟠 Moderate Issues</h4>
         <ul>{make_list(moderate)}</ul>
 
-        <h4 style="color:green;">Info</h4>
+        <h4 style="color:green;">🟢 Info</h4>
         <ul>{make_list(info)}</ul>
     </body>
     </html>
@@ -277,7 +276,7 @@ def run_worker():
 # ------------------------
 # SELF-PINGER (keeps Render awake)
 # ------------------------
-SELF_URL = os.getenv("SELF_URL", "")  # set this in your .env or Render env vars
+SELF_URL = os.getenv("SELF_URL", "")
 
 def pinger_loop():
     if not SELF_URL:
@@ -302,8 +301,14 @@ def home():
     return "Kobo Email Service Running ✅"
 
 
-@app.route("/webhook", methods=["POST"])
+@app.route("/webhook", methods=["GET", "POST"])  # GET handles Kobo's endpoint verification
 def webhook():
+
+    # Kobo sends a GET request first to verify the endpoint is alive
+    if request.method == "GET":
+        print("✅ Webhook GET verification received")
+        return jsonify({"status": "ok"}), 200
+
     # --- Optional secret token verification ---
     if WEBHOOK_SECRET:
         token = request.headers.get("Authorization", "")
