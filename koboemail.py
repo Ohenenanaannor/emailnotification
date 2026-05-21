@@ -134,6 +134,7 @@ def send_email(subject, body):
     try:
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
+            server.ehlo()
             server.login(EMAIL_USER, EMAIL_PASSWORD)
             server.send_message(msg)
         print("📧 EMAIL SENT ✅")
