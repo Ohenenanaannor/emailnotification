@@ -14,19 +14,33 @@ import threading
 # ------------------------
 load_dotenv()
 
-KOBOTOOLBOX_API_URL = "https://kf.kobotoolbox.org/api/v2/assets/ahCr8ALo67qrBdaRjQkm8K/data/"
-KOBOTOOLBOX_USERNAME = "annorpoku"
+KOBOTOOLBOX_API_URL = os.getenv("KOBOTOOLBOX_API_URL")
+KOBOTOOLBOX_USERNAME = os.getenv("KOBOTOOLBOX_USERNAME")
 KOBOTOOLBOX_PASSWORD = os.getenv("KOBOTOOLBOX_PASSWORD")
 
-SMTP_SERVER = "smtp.infomaniak.com"
+SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-EMAIL_USER = "ohenenana.annor@raincoatroofingsystems.com"
+EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-SUPERVISOR_EMAIL = "ohenenanaannor2000@gmail.com"
+
+# Comma-separated list of supervisor emails set in Render env vars
+# e.g. SUPERVISOR_EMAILS=person1@gmail.com,person2@gmail.com
+SUPERVISOR_EMAILS = [
+    email.strip()
+    for email in os.getenv("SUPERVISOR_EMAILS", "").split(",")
+    if email.strip()
+]
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # leave blank in .env to skip verification
+# ------------------------
+# STARTUP CHECK
+# ------------------------
+if not SUPERVISOR_EMAILS:
+    print("⚠️ WARNING: SUPERVISOR_EMAILS env variable is not set — no emails will be sent!")
+else:
+    print(f"📋 Supervisor emails loaded: {SUPERVISOR_EMAILS}")
 
 # ------------------------
 # DATABASE
@@ -121,45 +135,6 @@ def categorize_issues(sub):
     return serious, moderate, info
 
 # ------------------------
-# EMAIL — returns True if sent, False if failed
-# ------------------------
-def send_email(subject, body):
-    msg = MIMEMultipart()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
-    msg["To"] = SUPERVISOR_EMAIL
-    msg.attach(MIMEText(body, "html"))
-
-    # First attempt
-    try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        print("📧 EMAIL SENT ✅")
-        return True
-
-    except Exception as e:
-        print(f"❌ EMAIL ERROR (attempt 1): {e}")
-
-    # Wait then retry once
-    print("⏳ Waiting 10s before retry...")
-    time.sleep(10)
-
-    try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        print("📧 EMAIL SENT ON RETRY ✅")
-        return True
-
-    except Exception as e:
-        print(f"❌ EMAIL RETRY FAILED: {e}")
-        return False
-
-# ------------------------
 # FORMAT EMAIL
 # ------------------------
 def format_email(sub, serious, moderate, info):
@@ -189,8 +164,100 @@ def format_email(sub, serious, moderate, info):
     """
 
 # ------------------------
-# PROCESS ONE SUBMISSION
-# Only marks as processed if email was sent successfully
+# BUILD EMAIL MESSAGE
+# ------------------------
+def build_message(subject, body):
+    msg = MIMEMultipart()
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_USER
+    msg["To"] = ", ".join(SUPERVISOR_EMAILS)
+    msg.attach(MIMEText(body, "html"))
+    return msg
+
+# ------------------------
+# SEND SINGLE EMAIL — used by webhook
+# Returns True if sent, False if failed
+# ------------------------
+def send_email(subject, body):
+    if not SUPERVISOR_EMAILS:
+        print("⚠️ No supervisor emails configured — skipping send")
+        return False
+
+    msg = build_message(subject, body)
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_USER, SUPERVISOR_EMAILS, msg.as_string())
+        print(f"📧 EMAIL SENT to {SUPERVISOR_EMAILS} ✅")
+        return True
+
+    except Exception as e:
+        print(f"❌ EMAIL ERROR (attempt 1): {e}")
+
+    print("⏳ Waiting 15s before retry...")
+    time.sleep(15)
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_USER, SUPERVISOR_EMAILS, msg.as_string())
+        print(f"📧 EMAIL SENT ON RETRY to {SUPERVISOR_EMAILS} ✅")
+        return True
+
+    except Exception as e:
+        print(f"❌ EMAIL RETRY FAILED: {e}")
+        return False
+
+# ------------------------
+# SEND BULK EMAILS — used by polling loop
+# Logs in ONCE and sends all in one session
+# Returns set of sub_ids successfully sent
+# ------------------------
+def send_emails_bulk(email_queue):
+    if not email_queue:
+        return set()
+
+    if not SUPERVISOR_EMAILS:
+        print("⚠️ No supervisor emails configured — skipping bulk send")
+        return set()
+
+    sent_ids = set()
+
+    try:
+        print(f"📬 Opening Gmail SMTP session to send {len(email_queue)} email(s) to {SUPERVISOR_EMAILS}...")
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            print("🔑 Gmail SMTP login successful")
+
+            for sub_id, subject, body in email_queue:
+                try:
+                    msg = build_message(subject, body)
+                    server.sendmail(EMAIL_USER, SUPERVISOR_EMAILS, msg.as_string())
+                    print(f"📧 Email sent for submission {sub_id} ✅")
+                    sent_ids.add(sub_id)
+                    time.sleep(2)
+
+                except Exception as e:
+                    print(f"❌ Failed to send email for {sub_id}: {e}")
+
+    except Exception as e:
+        print(f"❌ SMTP SESSION ERROR: {e}")
+        print("⚠️ No emails sent this cycle — will retry next poll")
+
+    return sent_ids
+
+# ------------------------
+# PROCESS ONE SUBMISSION — used by webhook
 # ------------------------
 def process_submission(sub):
     sub_id = sub.get("_id")
@@ -214,17 +281,16 @@ def process_submission(sub):
 
         if not sent:
             print(f"⚠️ Email failed for {sub_id} — will retry next cycle")
-            return  # Do NOT mark as processed — will retry on next poll
+            return  # Do NOT mark as processed
 
     else:
         print(f"ℹ️ No issues found for submission {sub_id}")
 
-    # Only reaches here if email succeeded OR no issues found
     mark_processed_one(sub_id)
     print(f"✅ Marked {sub_id} as processed")
 
 # ------------------------
-# FETCH KOBO (for polling)
+# FETCH KOBO
 # ------------------------
 def fetch():
     try:
@@ -233,7 +299,6 @@ def fetch():
             KOBOTOOLBOX_API_URL,
             auth=(KOBOTOOLBOX_USERNAME, KOBOTOOLBOX_PASSWORD)
         )
-
         print("🌐 STATUS:", r.status_code)
 
         if r.status_code != 200:
@@ -241,7 +306,6 @@ def fetch():
 
         data = r.json()
         results = data.get("results", [])
-
         print(f"📦 FETCHED {len(results)} submissions")
         return results
 
@@ -250,17 +314,18 @@ def fetch():
         return []
 
 # ------------------------
-# POLLING MAIN (fallback)
+# POLLING MAIN
+# Collects all emails first, sends in ONE Gmail session
 # ------------------------
 def main():
     print("🔁 RUNNING POLLING MAIN")
-
     create_table()
 
     processed_ids = get_all_processed_ids()
     subs = sorted(fetch(), key=lambda x: x.get("_id", 0))
 
-    new_processed_ids = []
+    email_queue = []
+    no_issue_ids = []
 
     for sub in subs:
         sub_id = sub.get("_id")
@@ -269,30 +334,29 @@ def main():
             print(f"⏭️ Skipping {sub_id}")
             continue
 
-        print(f"➡️ Processing {sub_id}")
-
+        print(f"➡️ Queuing {sub_id}")
         serious, moderate, info = categorize_issues(sub)
 
         if serious or moderate or info:
             subject = f"Vehicle Report - {find_value(sub, 'vehicle') or 'Unknown'}"
             body = format_email(sub, serious, moderate, info)
-            sent = send_email(subject, body)
-
-            if not sent:
-                print(f"⚠️ Email failed for {sub_id} — skipping, will retry next cycle")
-                continue  # Do NOT add to processed — retry next poll
-
+            email_queue.append((sub_id, subject, body))
         else:
-            print("ℹ️ No issues")
+            print(f"ℹ️ No issues for {sub_id}")
+            no_issue_ids.append(sub_id)
 
-        new_processed_ids.append(sub_id)
-        time.sleep(3)  # 3 second gap between emails to avoid rate limiting
+    sent_ids = send_emails_bulk(email_queue)
 
-    mark_processed_bulk(new_processed_ids)
-    print(f"✅ Done. Processed {len(new_processed_ids)} new submissions.")
+    all_done = list(sent_ids) + no_issue_ids
+    mark_processed_bulk(all_done)
+    print(f"✅ Done. Sent {len(sent_ids)} email(s), marked {len(all_done)} submission(s) as processed.")
+
+    failed = [sub_id for sub_id, _, _ in email_queue if sub_id not in sent_ids]
+    if failed:
+        print(f"⚠️ {len(failed)} submission(s) failed and will retry next cycle: {failed}")
 
 # ------------------------
-# WORKER LOOP (polling every 5 mins)
+# WORKER LOOP
 # ------------------------
 def run_worker():
     print("🚀 POLLING WORKER STARTED")
@@ -301,11 +365,10 @@ def run_worker():
             main()
         except Exception as e:
             print("❌ LOOP ERROR:", e)
-
         time.sleep(300)
 
 # ------------------------
-# SELF-PINGER (keeps Render awake)
+# SELF-PINGER
 # ------------------------
 SELF_URL = os.getenv("SELF_URL", "")
 
@@ -320,7 +383,7 @@ def pinger_loop():
             print("📡 Pinged self ✅")
         except Exception as e:
             print(f"📡 Ping failed: {e}")
-        time.sleep(270)  # every 4.5 min
+        time.sleep(270)
 
 # ------------------------
 # FLASK
@@ -331,23 +394,19 @@ app = Flask(__name__)
 def home():
     return "Kobo Email Service Running ✅"
 
-
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
 
-    # Kobo sends GET first to verify the endpoint is alive
     if request.method == "GET":
         print("✅ Webhook GET verification received")
         return jsonify({"status": "ok"}), 200
 
-    # Optional secret token verification
     if WEBHOOK_SECRET:
         token = request.headers.get("Authorization", "")
         if token != f"Token {WEBHOOK_SECRET}":
             print("🚫 Unauthorized webhook request")
             return jsonify({"error": "Unauthorized"}), 401
 
-    # Parse payload
     data = request.get_json(silent=True)
 
     if not data:
@@ -356,7 +415,6 @@ def webhook():
 
     print(f"📩 WEBHOOK RECEIVED — submission ID: {data.get('_id', 'unknown')}")
 
-    # Process directly (not in thread) so errors show in logs
     try:
         process_submission(data)
     except Exception as e:
@@ -365,7 +423,6 @@ def webhook():
         traceback.print_exc()
 
     return jsonify({"status": "received"}), 200
-
 
 # ------------------------
 # START
