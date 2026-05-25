@@ -100,12 +100,12 @@ def find_value(submission, keyword):
 def is_not_ok(value):
     if value is None:
         return False
-    return str(value).lower().strip() in ["not_okay", "no", "false", "bad", "0"]
+    return str(value).lower().strip() in ["not_okay", "no", "false", "bad", "1"]
 
 def is_yes(value):
     if value is None:
         return False
-    return str(value).lower().strip() in ["yes", "true", "1"]
+    return str(value).lower().strip() in ["yes", "true", "0"]
 
 # ------------------------
 # ISSUE CATEGORIZATION
@@ -113,26 +113,104 @@ def is_yes(value):
 def categorize_issues(sub):
     serious, moderate, info = [], [], []
 
+# 🔴 SERIOUS
     if is_not_ok(find_value(sub, "engine_oil")):
         serious.append("Engine oil level")
-    if is_not_ok(find_value(sub, "coolant")):
+
+    if is_not_ok(find_value(sub, "coolant_level")):
         serious.append("Coolant level")
-    if is_not_ok(find_value(sub, "brake")):
+
+    if is_not_ok(find_value(sub, "brake_fluid")):
         serious.append("Brake fluid")
-    if is_not_ok(find_value(sub, "steering")):
-        serious.append("Power steering")
+
+    if is_not_ok(find_value(sub, "power_steering")):
+        serious.append("Power steering oil")
+
+    if is_not_ok(find_value(sub, "exhaust")):
+        serious.append("Exhaust leakage")
+
     if is_not_ok(find_value(sub, "tyre")):
         serious.append("Tyre condition")
+
     if is_yes(find_value(sub, "dvla")):
         serious.append("DVLA expired")
-    if is_yes(find_value(sub, "road")):
+
+    if is_yes(find_value(sub, "road_worthy")):
         serious.append("Road worthy expired")
-    if is_not_ok(find_value(sub, "horn")):
+
+    # NEW SERIOUS
+    if is_not_ok(find_value(sub, "fan_belts")):
+        serious.append("Fan belts condition")
+
+    if is_not_ok(find_value(sub, "coolant_leaks")):
+        serious.append("Coolant leakage")
+
+    if is_not_ok(find_value(sub, "sound_of_engine")):
+        serious.append("Abnormal engine sound")
+
+    if is_not_ok(find_value(sub, "smoking")):
+        serious.append("Engine smoking")
+
+    # 🟠 MODERATE
+    if is_not_ok(find_value(sub, "horn_function")):
         moderate.append("Horn not working")
-    if is_not_ok(find_value(sub, "clean")):
+
+    if is_not_ok(find_value(sub, "indicator")):
+        moderate.append("Indicator issue")
+
+    if is_not_ok(find_value(sub, "fan_operation")):
+        moderate.append("Fan issue")
+
+    if is_not_ok(find_value(sub, "panel_dashboard")):
+        moderate.append("Dashboard light issue")
+
+    if is_not_ok(find_value(sub, "warning_reflective_triangle")):
+        moderate.append("Warning triangle missing")
+
+    # NEW MODERATE
+    if is_not_ok(find_value(sub, "brake_hand_brake_function")):
+        moderate.append("Hand brake issue")
+
+    if is_not_ok(find_value(sub, "brake_light_function")):
+        moderate.append("Brake light issue")
+
+    if is_not_ok(find_value(sub, "headlamp_function")):
+        moderate.append("Headlamp issue")
+
+    if is_not_ok(find_value(sub, "tail_light_function")):
+        moderate.append("Tail light issue")
+
+    # 🟢 INFO
+    if is_not_ok(find_value(sub, "cleanliness")):
         info.append("Cleanliness issue")
 
+    if is_not_ok(find_value(sub, "seat")):
+        info.append("Seat issue")
+
+    # NEW INFO
+    if is_not_ok(find_value(sub, "windscreen")):
+        info.append("Windscreen issue")
+
+    if is_not_ok(find_value(sub, "side_mirror")):
+        info.append("Side mirror issue")
+
+    if is_not_ok(find_value(sub, "reflective_sticker")):
+        info.append("Reflective sticker issue")
+
+    if is_not_ok(find_value(sub, "jack_wheel_spanner")):
+        info.append("Jack & wheel spanner missing")
+
+    if is_not_ok(find_value(sub, "fire_extinguisher")):
+        info.append("Fire extinguisher issue")
+
+    if is_not_ok(find_value(sub, "chucks")):
+        info.append("Wheel chucks missing")
+
+    if is_not_ok(find_value(sub, "container_belts_and_ropes")):
+        info.append("Container belts/ropes issue")
+
     return serious, moderate, info
+
 
 # ------------------------
 # FORMAT EMAIL
