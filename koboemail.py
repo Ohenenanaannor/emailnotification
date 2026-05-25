@@ -373,19 +373,26 @@ def process_submission(sub):
 def fetch():
     try:
         print("🌐 Calling Kobo API...")
-        r = requests.get(
-            KOBOTOOLBOX_API_URL,
-            auth=(KOBOTOOLBOX_USERNAME, KOBOTOOLBOX_PASSWORD)
-        )
-        print("🌐 STATUS:", r.status_code)
+        all_results = []
+        url = f"{KOBOTOOLBOX_API_URL}?limit=500"
 
-        if r.status_code != 200:
-            return []
+        while url:
+            r = requests.get(url, auth=(KOBOTOOLBOX_USERNAME, KOBOTOOLBOX_PASSWORD))
+            print("🌐 STATUS:", r.status_code)
 
-        data = r.json()
-        results = data.get("results", [])
-        print(f"📦 FETCHED {len(results)} submissions")
-        return results
+            if r.status_code != 200:
+                print("❌ Bad response from Kobo")
+                break
+
+            data = r.json()
+            results = data.get("results", [])
+            all_results.extend(results)
+            print(f"📦 Fetched {len(results)} (total so far: {len(all_results)})")
+
+            url = data.get("next")  # None when last page
+
+        print(f"📦 TOTAL FETCHED: {len(all_results)} submissions")
+        return all_results
 
     except Exception as e:
         print("❌ FETCH ERROR:", e)
