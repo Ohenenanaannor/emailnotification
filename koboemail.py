@@ -1,13 +1,12 @@
 import requests
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import os
 import time
 from dotenv import load_dotenv
 import psycopg2
 from flask import Flask, request, jsonify
 import threading
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 # ------------------------
 # LOAD ENV
@@ -18,10 +17,8 @@ KOBOTOOLBOX_API_URL = os.getenv("KOBOTOOLBOX_API_URL")
 KOBOTOOLBOX_USERNAME = os.getenv("KOBOTOOLBOX_USERNAME")
 KOBOTOOLBOX_PASSWORD = os.getenv("KOBOTOOLBOX_PASSWORD")
 
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
 EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 
 # Comma-separated list of supervisor emails set in Render env vars
 # e.g. SUPERVISOR_EMAILS=person1@gmail.com,person2@gmail.com
@@ -41,6 +38,11 @@ if not SUPERVISOR_EMAILS:
     print("⚠️ WARNING: SUPERVISOR_EMAILS env variable is not set — no emails will be sent!")
 else:
     print(f"📋 Supervisor emails loaded: {SUPERVISOR_EMAILS}")
+
+if not SENDGRID_API_KEY:
+    print("⚠️ WARNING: SENDGRID_API_KEY is not set — no emails will be sent!")
+else:
+    print("✅ SendGrid API key loaded")
 
 # ------------------------
 # DATABASE
@@ -100,12 +102,12 @@ def find_value(submission, keyword):
 def is_not_ok(value):
     if value is None:
         return False
-    return str(value).lower().strip() in ["not_okay", "no", "false", "bad", "1"]
+    return str(value).lower().strip() in ["not_okay", "no", "false", "bad", "0"]
 
 def is_yes(value):
     if value is None:
         return False
-    return str(value).lower().strip() in ["yes", "true", "0"]
+    return str(value).lower().strip() in ["yes", "true", "1"]
 
 # ------------------------
 # ISSUE CATEGORIZATION
@@ -113,104 +115,73 @@ def is_yes(value):
 def categorize_issues(sub):
     serious, moderate, info = [], [], []
 
-# 🔴 SERIOUS
+    # 🔴 SERIOUS
     if is_not_ok(find_value(sub, "engine_oil")):
         serious.append("Engine oil level")
-
     if is_not_ok(find_value(sub, "coolant_level")):
         serious.append("Coolant level")
-
     if is_not_ok(find_value(sub, "brake_fluid")):
         serious.append("Brake fluid")
-
     if is_not_ok(find_value(sub, "power_steering")):
         serious.append("Power steering oil")
-
     if is_not_ok(find_value(sub, "exhaust")):
         serious.append("Exhaust leakage")
-
     if is_not_ok(find_value(sub, "tyre")):
         serious.append("Tyre condition")
-
     if is_yes(find_value(sub, "dvla")):
         serious.append("DVLA expired")
-
     if is_yes(find_value(sub, "road_worthy")):
         serious.append("Road worthy expired")
-
-    # NEW SERIOUS
     if is_not_ok(find_value(sub, "fan_belts")):
         serious.append("Fan belts condition")
-
     if is_not_ok(find_value(sub, "coolant_leaks")):
         serious.append("Coolant leakage")
-
     if is_not_ok(find_value(sub, "sound_of_engine")):
         serious.append("Abnormal engine sound")
-
     if is_not_ok(find_value(sub, "smoking")):
         serious.append("Engine smoking")
 
     # 🟠 MODERATE
     if is_not_ok(find_value(sub, "horn_function")):
         moderate.append("Horn not working")
-
     if is_not_ok(find_value(sub, "indicator")):
         moderate.append("Indicator issue")
-
     if is_not_ok(find_value(sub, "fan_operation")):
         moderate.append("Fan issue")
-
     if is_not_ok(find_value(sub, "panel_dashboard")):
         moderate.append("Dashboard light issue")
-
     if is_not_ok(find_value(sub, "warning_reflective_triangle")):
         moderate.append("Warning triangle missing")
-
-    # NEW MODERATE
     if is_not_ok(find_value(sub, "brake_hand_brake_function")):
         moderate.append("Hand brake issue")
-
     if is_not_ok(find_value(sub, "brake_light_function")):
         moderate.append("Brake light issue")
-
     if is_not_ok(find_value(sub, "headlamp_function")):
         moderate.append("Headlamp issue")
-
     if is_not_ok(find_value(sub, "tail_light_function")):
         moderate.append("Tail light issue")
 
     # 🟢 INFO
     if is_not_ok(find_value(sub, "cleanliness")):
         info.append("Cleanliness issue")
-
     if is_not_ok(find_value(sub, "seat")):
         info.append("Seat issue")
-
-    # NEW INFO
     if is_not_ok(find_value(sub, "windscreen")):
         info.append("Windscreen issue")
-
     if is_not_ok(find_value(sub, "side_mirror")):
         info.append("Side mirror issue")
-
     if is_not_ok(find_value(sub, "reflective_sticker")):
         info.append("Reflective sticker issue")
-
     if is_not_ok(find_value(sub, "jack_wheel_spanner")):
         info.append("Jack & wheel spanner missing")
-
     if is_not_ok(find_value(sub, "fire_extinguisher")):
         info.append("Fire extinguisher issue")
-
     if is_not_ok(find_value(sub, "chucks")):
         info.append("Wheel chucks missing")
-
     if is_not_ok(find_value(sub, "container_belts_and_ropes")):
         info.append("Container belts/ropes issue")
 
     return serious, moderate, info
-
 
 # ------------------------
 # FORMAT EMAIL
@@ -242,95 +213,58 @@ def format_email(sub, serious, moderate, info):
     """
 
 # ------------------------
-# BUILD EMAIL MESSAGE
-# ------------------------
-def build_message(subject, body):
-    msg = MIMEMultipart()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
-    msg["To"] = ", ".join(SUPERVISOR_EMAILS)
-    msg.attach(MIMEText(body, "html"))
-    return msg
-
-# ------------------------
-# SEND SINGLE EMAIL — used by webhook
-# Returns True if sent, False if failed
+# SEND EMAIL VIA SENDGRID
+# Sends to all supervisors, returns True if success
 # ------------------------
 def send_email(subject, body):
     if not SUPERVISOR_EMAILS:
         print("⚠️ No supervisor emails configured — skipping send")
         return False
 
-    msg = build_message(subject, body)
+    if not SENDGRID_API_KEY:
+        print("⚠️ No SendGrid API key — skipping send")
+        return False
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USER, SUPERVISOR_EMAILS, msg.as_string())
-        print(f"📧 EMAIL SENT to {SUPERVISOR_EMAILS} ✅")
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+
+        for recipient in SUPERVISOR_EMAILS:
+            message = Mail(
+                from_email=EMAIL_USER,
+                to_emails=recipient,
+                subject=subject,
+                html_content=body
+            )
+            sg.send(message)
+            print(f"📧 EMAIL SENT to {recipient} ✅")
+
         return True
 
     except Exception as e:
-        print(f"❌ EMAIL ERROR (attempt 1): {e}")
-
-    print("⏳ Waiting 15s before retry...")
-    time.sleep(15)
-
-    try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USER, SUPERVISOR_EMAILS, msg.as_string())
-        print(f"📧 EMAIL SENT ON RETRY to {SUPERVISOR_EMAILS} ✅")
-        return True
-
-    except Exception as e:
-        print(f"❌ EMAIL RETRY FAILED: {e}")
+        print(f"❌ SENDGRID ERROR: {e}")
         return False
 
 # ------------------------
 # SEND BULK EMAILS — used by polling loop
-# Logs in ONCE and sends all in one session
 # Returns set of sub_ids successfully sent
 # ------------------------
 def send_emails_bulk(email_queue):
     if not email_queue:
         return set()
 
-    if not SUPERVISOR_EMAILS:
-        print("⚠️ No supervisor emails configured — skipping bulk send")
+    if not SUPERVISOR_EMAILS or not SENDGRID_API_KEY:
+        print("⚠️ Missing email config — skipping bulk send")
         return set()
 
     sent_ids = set()
 
-    try:
-        print(f"📬 Opening Gmail SMTP session to send {len(email_queue)} email(s) to {SUPERVISOR_EMAILS}...")
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            print("🔑 Gmail SMTP login successful")
-
-            for sub_id, subject, body in email_queue:
-                try:
-                    msg = build_message(subject, body)
-                    server.sendmail(EMAIL_USER, SUPERVISOR_EMAILS, msg.as_string())
-                    print(f"📧 Email sent for submission {sub_id} ✅")
-                    sent_ids.add(sub_id)
-                    time.sleep(2)
-
-                except Exception as e:
-                    print(f"❌ Failed to send email for {sub_id}: {e}")
-
-    except Exception as e:
-        print(f"❌ SMTP SESSION ERROR: {e}")
-        print("⚠️ No emails sent this cycle — will retry next poll")
+    for sub_id, subject, body in email_queue:
+        sent = send_email(subject, body)
+        if sent:
+            sent_ids.add(sub_id)
+        else:
+            print(f"⚠️ Failed to send email for {sub_id} — will retry next cycle")
+        time.sleep(1)  # small gap between emails
 
     return sent_ids
 
@@ -368,7 +302,7 @@ def process_submission(sub):
     print(f"✅ Marked {sub_id} as processed")
 
 # ------------------------
-# FETCH KOBO
+# FETCH KOBO (with pagination)
 # ------------------------
 def fetch():
     try:
@@ -389,7 +323,7 @@ def fetch():
             all_results.extend(results)
             print(f"📦 Fetched {len(results)} (total so far: {len(all_results)})")
 
-            url = data.get("next")  # None when last page
+            url = data.get("next")
 
         print(f"📦 TOTAL FETCHED: {len(all_results)} submissions")
         return all_results
@@ -400,7 +334,6 @@ def fetch():
 
 # ------------------------
 # POLLING MAIN
-# Collects all emails first, sends in ONE Gmail session
 # ------------------------
 def main():
     print("🔁 RUNNING POLLING MAIN")
@@ -482,21 +415,15 @@ def home():
 @app.route("/test-email")
 def test_email():
     try:
-        msg = MIMEMultipart()
-        msg["Subject"] = "Test from Render"
-        msg["From"] = EMAIL_USER
-        msg["To"] = ", ".join(SUPERVISOR_EMAILS)
-        msg.attach(MIMEText("<h3>Render email test ✅</h3>", "html"))
-
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USER, SUPERVISOR_EMAILS, msg.as_string())
-
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        message = Mail(
+            from_email=EMAIL_USER,
+            to_emails=SUPERVISOR_EMAILS[0],
+            subject="Test from Render ✅",
+            html_content="<h3>SendGrid email test from Render works! ✅</h3>"
+        )
+        sg.send(message)
         return f"✅ Email sent to {SUPERVISOR_EMAILS}"
-
     except Exception as e:
         return f"❌ Email failed: {str(e)}"
 
