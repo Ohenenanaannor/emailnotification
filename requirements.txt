@@ -3,3 +3,4 @@ python-dotenv
 psycopg2-binary
 flask
 sendgrid
+sib-api-v3-sdk
