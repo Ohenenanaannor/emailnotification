@@ -414,24 +414,24 @@ def home():
 
 @app.route("/test-email")
 def test_email():
+    debug = {
+        "key_prefix": SENDGRID_API_KEY[:15] if SENDGRID_API_KEY else "MISSING",
+        "key_length": len(SENDGRID_API_KEY) if SENDGRID_API_KEY else 0,
+        "from_email": EMAIL_USER,
+        "to_emails": SUPERVISOR_EMAILS,
+    }
     try:
-        debug = {
-            "key_prefix": SENDGRID_API_KEY[:10] if SENDGRID_API_KEY else "MISSING",
-            "from_email": EMAIL_USER,
-            "to_emails": SUPERVISOR_EMAILS,
-        }
-        
         sg = SendGridAPIClient(SENDGRID_API_KEY)
         message = Mail(
             from_email=EMAIL_USER,
             to_emails=SUPERVISOR_EMAILS[0],
             subject="Test from Render ✅",
-            html_content="<h3>SendGrid email test from Render works! ✅</h3>"
+            html_content="<h3>Test</h3>"
         )
-        sg.send(message)
-        return f"✅ Email sent | Debug: {debug}"
+        response = sg.send(message)
+        return f"✅ Sent | Status: {response.status_code} | Debug: {debug}"
     except Exception as e:
-        return f"❌ Email failed: {str(e)} | Debug: {debug}"
+        return f"❌ Failed | Error: {str(e)} | Body: {e.body if hasattr(e, 'body') else 'no body'} | Debug: {debug}"
     
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
