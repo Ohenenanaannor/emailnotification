@@ -479,6 +479,27 @@ app = Flask(__name__)
 def home():
     return "Kobo Email Service Running ✅"
 
+@app.route("/test-email")
+def test_email():
+    try:
+        msg = MIMEMultipart()
+        msg["Subject"] = "Test from Render"
+        msg["From"] = EMAIL_USER
+        msg["To"] = ", ".join(SUPERVISOR_EMAILS)
+        msg.attach(MIMEText("<h3>Render email test ✅</h3>", "html"))
+
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_USER, SUPERVISOR_EMAILS, msg.as_string())
+
+        return f"✅ Email sent to {SUPERVISOR_EMAILS}"
+
+    except Exception as e:
+        return f"❌ Email failed: {str(e)}"
+
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
 
