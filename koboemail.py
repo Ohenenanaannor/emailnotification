@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 import psycopg2
 from flask import Flask, request, jsonify
 import threading
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+import sib_api_v3_sdk
+from sib_api_v3_sdk.rest import ApiException
 
 # ------------------------
 # LOAD ENV
@@ -18,10 +18,8 @@ KOBOTOOLBOX_USERNAME = os.getenv("KOBOTOOLBOX_USERNAME")
 KOBOTOOLBOX_PASSWORD = os.getenv("KOBOTOOLBOX_PASSWORD")
 
 EMAIL_USER = os.getenv("EMAIL_USER")
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
+BREVO_API_KEY = os.getenv("BREVO_API_KEY")
 
-# Comma-separated list of supervisor emails set in Render env vars
-# e.g. SUPERVISOR_EMAILS=person1@gmail.com,person2@gmail.com
 SUPERVISOR_EMAILS = [
     email.strip()
     for email in os.getenv("SUPERVISOR_EMAILS", "").split(",")
@@ -39,10 +37,10 @@ if not SUPERVISOR_EMAILS:
 else:
     print(f"📋 Supervisor emails loaded: {SUPERVISOR_EMAILS}")
 
-if not SENDGRID_API_KEY:
-    print("⚠️ WARNING: SENDGRID_API_KEY is not set — no emails will be sent!")
+if not BREVO_API_KEY:
+    print("⚠️ WARNING: BREVO_API_KEY is not set — no emails will be sent!")
 else:
-    print("✅ SendGrid API key loaded")
+    print("✅ Brevo API key loaded")
 
 # ------------------------
 # DATABASE
@@ -213,46 +211,49 @@ def format_email(sub, serious, moderate, info):
     """
 
 # ------------------------
-# SEND EMAIL VIA SENDGRID
-# Sends to all supervisors, returns True if success
+# SEND EMAIL VIA BREVO
 # ------------------------
 def send_email(subject, body):
     if not SUPERVISOR_EMAILS:
         print("⚠️ No supervisor emails configured — skipping send")
         return False
 
-    if not SENDGRID_API_KEY:
-        print("⚠️ No SendGrid API key — skipping send")
+    if not BREVO_API_KEY:
+        print("⚠️ No Brevo API key — skipping send")
         return False
 
     try:
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        configuration = sib_api_v3_sdk.Configuration()
+        configuration.api_key['api-key'] = BREVO_API_KEY
+
+        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(
+            sib_api_v3_sdk.ApiClient(configuration)
+        )
 
         for recipient in SUPERVISOR_EMAILS:
-            message = Mail(
-                from_email=EMAIL_USER,
-                to_emails=recipient,
+            send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+                to=[{"email": recipient}],
+                sender={"email": EMAIL_USER, "name": "Vehicle Inspection"},
                 subject=subject,
                 html_content=body
             )
-            sg.send(message)
+            api_instance.send_transac_email(send_smtp_email)
             print(f"📧 EMAIL SENT to {recipient} ✅")
 
         return True
 
-    except Exception as e:
-        print(f"❌ SENDGRID ERROR: {e}")
+    except ApiException as e:
+        print(f"❌ BREVO ERROR: {e}")
         return False
 
 # ------------------------
-# SEND BULK EMAILS — used by polling loop
-# Returns set of sub_ids successfully sent
+# SEND BULK EMAILS
 # ------------------------
 def send_emails_bulk(email_queue):
     if not email_queue:
         return set()
 
-    if not SUPERVISOR_EMAILS or not SENDGRID_API_KEY:
+    if not SUPERVISOR_EMAILS or not BREVO_API_KEY:
         print("⚠️ Missing email config — skipping bulk send")
         return set()
 
@@ -264,7 +265,7 @@ def send_emails_bulk(email_queue):
             sent_ids.add(sub_id)
         else:
             print(f"⚠️ Failed to send email for {sub_id} — will retry next cycle")
-        time.sleep(1)  # small gap between emails
+        time.sleep(1)
 
     return sent_ids
 
@@ -293,7 +294,7 @@ def process_submission(sub):
 
         if not sent:
             print(f"⚠️ Email failed for {sub_id} — will retry next cycle")
-            return  # Do NOT mark as processed
+            return
 
     else:
         print(f"ℹ️ No issues found for submission {sub_id}")
@@ -414,25 +415,25 @@ def home():
 
 @app.route("/test-email")
 def test_email():
-    debug = {
-        "key_prefix": SENDGRID_API_KEY[:15] if SENDGRID_API_KEY else "MISSING",
-        "key_length": len(SENDGRID_API_KEY) if SENDGRID_API_KEY else 0,
-        "from_email": EMAIL_USER,
-        "to_emails": SUPERVISOR_EMAILS,
-    }
     try:
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        message = Mail(
-            from_email=EMAIL_USER,
-            to_emails=SUPERVISOR_EMAILS[0],
-            subject="Test from Render ✅",
-            html_content="<h3>Test</h3>"
+        configuration = sib_api_v3_sdk.Configuration()
+        configuration.api_key['api-key'] = BREVO_API_KEY
+
+        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(
+            sib_api_v3_sdk.ApiClient(configuration)
         )
-        response = sg.send(message)
-        return f"✅ Sent | Status: {response.status_code} | Debug: {debug}"
+
+        send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+            to=[{"email": SUPERVISOR_EMAILS[0]}],
+            sender={"email": EMAIL_USER, "name": "Vehicle Inspection"},
+            subject="Test from Render ✅",
+            html_content="<h3>Brevo email test works! ✅</h3>"
+        )
+        api_instance.send_transac_email(send_smtp_email)
+        return f"✅ Email sent to {SUPERVISOR_EMAILS}"
     except Exception as e:
-        return f"❌ Failed | Error: {str(e)} | Body: {e.body if hasattr(e, 'body') else 'no body'} | Debug: {debug}"
-    
+        return f"❌ Email failed: {str(e)}"
+
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
 
