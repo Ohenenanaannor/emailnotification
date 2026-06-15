@@ -346,7 +346,7 @@ def run_worker():
             main()
         except Exception as e:
             print("❌ LOOP ERROR:", e)
-        time.sleep(300)
+        time.sleep(3600)
 
 # ------------------------
 # SELF-PINGER (keeps Render free tier awake)
