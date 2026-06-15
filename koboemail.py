@@ -158,6 +158,18 @@ def categorize_issues(sub):
 def format_email(sub, serious, moderate, info):
     vehicle = find_value(sub, "vehicle") or "Unknown"
     driver  = find_value(sub, "name")    or "Unknown"
+    
+    # Kobo sends this as "2024-01-15T08:30:00" — reformat it nicely
+    raw_time = sub.get("_submission_time", "")
+    if raw_time:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(raw_time, "%Y-%m-%dT%H:%M:%S")
+            submission_time = dt.strftime("%d %b %Y, %I:%M %p")  # e.g. 15 Jan 2024, 08:30 AM
+        except:
+            submission_time = raw_time  # fallback to raw if parsing fails
+    else:
+        submission_time = "Unknown"
 
     def make_list(items):
         return "".join([f"<li>{i}</li>" for i in items]) or "<li>None</li>"
@@ -168,6 +180,7 @@ def format_email(sub, serious, moderate, info):
         <h3>Vehicle Inspection Report</h3>
         <p><b>Vehicle:</b> {vehicle}</p>
         <p><b>Driver:</b> {driver}</p>
+        <p><b>Submitted:</b> {submission_time}</p>
 
         <h4 style="color:red;">🔴 Serious Issues</h4>
         <ul>{make_list(serious)}</ul>
