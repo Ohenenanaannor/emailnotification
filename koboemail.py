@@ -192,7 +192,7 @@ def format_email(sub, serious, moderate, info):
         <h4 style="color:orange;">🟠 Moderate Issues</h4>
         <ul>{make_list(moderate)}</ul>
 
-        <h4 style="color:green;">🟢 Info</h4>
+        <h4 style="color:green;">🟡 Info</h4>
         <ul>{make_list(info)}</ul>
     </body>
     </html>
