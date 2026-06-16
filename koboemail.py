@@ -127,9 +127,9 @@ def categorize_issues(sub):
     if is_not_ok(find_value(sub, "coolant_leaks")):     serious.append("Coolant leakage")
     if is_not_ok(find_value(sub, "sound_of_engine")):   serious.append("Abnormal engine sound")
     if is_not_ok(find_value(sub, "smoking")):           serious.append("Engine smoking")
-    if is_not_ok(find_value(sub, "insurance_expired")):           serious.append("Insurance expired")
-    if is_not_ok(find_value(sub, "service_time")):           serious.append("Service time due")
-    if is_not_ok(find_value(sub, "license")):           serious.append("license expired")
+    if is_yes(find_value(sub, "insurance_expired")):           serious.append("Insurance expired")
+    if is_yes(find_value(sub, "service_time")):           serious.append("Service time due")
+    if is_yes(find_value(sub, "license")):           serious.append("license expired")
     
     # 🟠 MODERATE
     if is_not_ok(find_value(sub, "horn_function")):              moderate.append("Horn not working")
