@@ -178,6 +178,13 @@ def format_email(sub, serious, moderate, info):
     def make_list(items):
         return "".join([f"<li>{i}</li>" for i in items]) or "<li>None</li>"
 
+    no_issues = not (serious or moderate or info)
+
+    status_banner = (
+        '<h4 style="color:green;">✅ No Issues Reported — Vehicle Clear</h4>'
+        if no_issues else ""
+    )
+
     return f"""
     <html>
     <body>
@@ -185,14 +192,14 @@ def format_email(sub, serious, moderate, info):
         <p><b>Vehicle:</b> {vehicle}</p>
         <p><b>Driver:</b> {driver}</p>
         <p><b>Submitted:</b> {submission_time}</p>
-
+        {status_banner}
         <h4 style="color:red;">🔴 Serious Issues</h4>
         <ul>{make_list(serious)}</ul>
 
         <h4 style="color:orange;">🟠 Moderate Issues</h4>
         <ul>{make_list(moderate)}</ul>
 
-        <h4 style="color:green;">🟡 Info</h4>
+        <h4 style="color:yellow;">🟡 Info</h4>
         <ul>{make_list(info)}</ul>
     </body>
     </html>
@@ -251,6 +258,15 @@ def send_emails_bulk(email_queue):
     return sent_ids
 
 # ------------------------
+# BUILD SUBJECT — shared by webhook + polling paths
+# ------------------------
+def build_subject(sub, serious, moderate, info):
+    vehicle = find_value(sub, 'vehicle') or 'Unknown'
+    if serious or moderate or info:
+        return f"Vehicle Report - {vehicle}"
+    return f"Vehicle Report - {vehicle} - No Issues ✅"
+
+# ------------------------
 # PROCESS ONE SUBMISSION — used by webhook
 # ------------------------
 def process_submission(sub):
@@ -267,17 +283,16 @@ def process_submission(sub):
     print(f"➡️ Processing submission {sub_id}")
     serious, moderate, info = categorize_issues(sub)
 
-    if serious or moderate or info:
-        subject = f"Vehicle Report - {find_value(sub, 'vehicle') or 'Unknown'}"
-        body    = format_email(sub, serious, moderate, info)
-        sent    = send_via_apps_script(subject, body)
+    if not (serious or moderate or info):
+        print(f"ℹ️ No issues found for submission {sub_id} — sending clear report anyway")
 
-        if not sent:
-            print(f"⚠️ Email failed for {sub_id} — will retry next cycle")
-            return  # Do NOT mark as processed
+    subject = build_subject(sub, serious, moderate, info)
+    body    = format_email(sub, serious, moderate, info)
+    sent    = send_via_apps_script(subject, body)
 
-    else:
-        print(f"ℹ️ No issues found for submission {sub_id}")
+    if not sent:
+        print(f"⚠️ Email failed for {sub_id} — will retry next cycle")
+        return  # Do NOT mark as processed
 
     mark_processed_one(sub_id)
     print(f"✅ Marked {sub_id} as processed")
@@ -323,7 +338,6 @@ def main():
     subs          = sorted(fetch(), key=lambda x: x.get("_id", 0))
 
     email_queue  = []
-    no_issue_ids = []
 
     for sub in subs:
         sub_id = sub.get("_id")
@@ -335,26 +349,24 @@ def main():
         print(f"➡️ Queuing {sub_id}")
         serious, moderate, info = categorize_issues(sub)
 
-        if serious or moderate or info:
-            subject = f"Vehicle Report - {find_value(sub, 'vehicle') or 'Unknown'}"
-            body    = format_email(sub, serious, moderate, info)
-            email_queue.append((sub_id, subject, body))
-        else:
-            print(f"ℹ️ No issues for {sub_id}")
-            no_issue_ids.append(sub_id)
+        if not (serious or moderate or info):
+            print(f"ℹ️ No issues for {sub_id} — queuing clear report anyway")
+
+        subject = build_subject(sub, serious, moderate, info)
+        body    = format_email(sub, serious, moderate, info)
+        email_queue.append((sub_id, subject, body))
 
     sent_ids = send_emails_bulk(email_queue)
 
-    all_done = list(sent_ids) + no_issue_ids
-    mark_processed_bulk(all_done)
-    print(f"✅ Done. Sent {len(sent_ids)} email(s), marked {len(all_done)} submission(s) as processed.")
+    mark_processed_bulk(list(sent_ids))
+    print(f"✅ Done. Sent {len(sent_ids)}/{len(email_queue)} email(s) and marked them as processed.")
 
     failed = [sub_id for sub_id, _, _ in email_queue if sub_id not in sent_ids]
     if failed:
         print(f"⚠️ {len(failed)} submission(s) failed — will retry next cycle: {failed}")
 
 # ------------------------
-# WORKER LOOP (every 5 minutes)
+# WORKER LOOP (every hour)
 # ------------------------
 def run_worker():
     print("🚀 POLLING WORKER STARTED")
